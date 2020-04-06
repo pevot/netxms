@@ -37,6 +37,7 @@ import org.eclipse.swt.events.ModifyListener;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IActionBars;
 import org.eclipse.ui.ISaveablePart;
 import org.eclipse.ui.IViewSite;
@@ -51,7 +52,10 @@ import org.eclipse.ui.forms.widgets.TableWrapData;
 import org.eclipse.ui.forms.widgets.TableWrapLayout;
 import org.eclipse.ui.part.ViewPart;
 import org.netxms.client.NXCSession;
+import org.netxms.client.SessionListener;
+import org.netxms.client.SessionNotification;
 import org.netxms.client.snmp.SnmpUsmCredential;
+import org.netxms.ui.eclipse.actions.RefreshAction;
 import org.netxms.ui.eclipse.console.resources.SharedIcons;
 import org.netxms.ui.eclipse.jobs.ConsoleJob;
 import org.netxms.ui.eclipse.objectbrowser.widgets.ZoneSelector;
@@ -62,6 +66,8 @@ import org.netxms.ui.eclipse.snmp.dialogs.AddUsmCredDialog;
 import org.netxms.ui.eclipse.snmp.views.helpers.NetworkConfig;
 import org.netxms.ui.eclipse.snmp.views.helpers.SnmpUsmLabelProvider;
 import org.netxms.ui.eclipse.tools.MessageDialogHelper;
+import org.netxms.ui.eclipse.widgets.CompositeWithMessageBar;
+import org.netxms.ui.eclipse.widgets.MessageBar;
 import org.netxms.ui.eclipse.widgets.SortableTableViewer;
 
 /**
@@ -80,6 +86,9 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 	
 	private NXCSession session;
 	private boolean modified = false;
+	private boolean bothModified = false;
+   private boolean saveInProgress = false;
+   private CompositeWithMessageBar content;
 	private FormToolkit toolkit;
 	private ScrolledForm form;
 	private TableViewer snmpCommunityList;
@@ -87,9 +96,12 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 	private TableViewer snmpPortList;
    private TableViewer sharedSecretList;
 	private Action actionSave;
+   private RefreshAction actionRefresh;
 	private NetworkConfig config;
 	private ZoneSelector zoneSelector;
-	private long zoneUIN = NetworkConfig.SNMP_CONFIG_GLOBAL;
+   private Display display;
+	private long zoneUIN = NetworkConfig.NETWORK_CONFIG_GLOBAL;
+
 
 	/* (non-Javadoc)
     * @see org.eclipse.ui.part.ViewPart#init(org.eclipse.ui.IViewSite)
@@ -99,6 +111,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
    {
       super.init(site);
       session = ConsoleSharedData.getSession();
+      config = new NetworkConfig(session);
    }
 
    /* (non-Javadoc)
@@ -107,8 +120,11 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 	@Override
 	public void createPartControl(Composite parent)
 	{
+      display = parent.getDisplay();
+	   
+      content = new CompositeWithMessageBar(parent, SWT.NONE);
 		toolkit = new FormToolkit(getSite().getShell().getDisplay());
-		form = toolkit.createScrolledForm(parent);
+		form = toolkit.createScrolledForm(content.getContent());
       form.setText(Messages.get().NetworkCredentials_FormTitle);
 	
 		TableWrapLayout layout = new TableWrapLayout();
@@ -134,10 +150,55 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
             public void modifyText(ModifyEvent e)
             {
                zoneUIN = zoneSelector.getZoneUIN();
-               loadSnmpConfig();
+               updateFiledContant();
             }
          });
 		}
+		
+		session.addListener(new SessionListener() {
+         
+         @Override
+         public void notificationHandler(SessionNotification n)
+         {
+            int type = 0;
+            switch(n.getCode())
+            {
+               case SessionNotification.COMUNITIES_CONFIG_CHANGED:
+                  type = NetworkConfig.COMUNITIES;
+                  break;
+               case SessionNotification.USM_CONFIG_CHANGED:
+                  type = NetworkConfig.USM;
+                  break;
+               case SessionNotification.PORTS_CONFIG_CHANGED:
+                  type = NetworkConfig.PORTS;
+                  break;
+               case SessionNotification.SECRET_CONFIG_CHANGED:
+                  type = NetworkConfig.SECRET;
+                  break;
+                  
+            }     
+            if(type != 0)
+            {
+               final int configType = type;
+               display.asyncExec(new Runnable() {
+                  @Override
+                  public void run()
+                  {
+                     if (!modified)
+                     {
+                        loadSnmpConfig(configType, n.getSubCode());
+                     }
+                     else if (!saveInProgress)
+                     {
+                        content.showMessage(MessageBar.WARNING,
+                              "Network credentials are modified by other users. \"Refresh\" will discard local changes. \"Save\" will overwrite other users changes with local changes.");
+                        bothModified = true;
+                     }
+                  }
+               });
+            }
+         }
+      });
       
 		createSnmpCommunitySection();
 		createSnmpPortList();
@@ -148,25 +209,25 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 		contributeToActionBars();
 
       // Load config
-      loadSnmpConfig();
+      loadSnmpConfig(NetworkConfig.ALL_CONFIGS, NetworkConfig.NETWORK_CONFIG_ALL);
 	}
 	
 	/**
 	 * Load SNMP config
 	 * @param zoneUIN of config
 	 */
-	private void loadSnmpConfig()
+	private void loadSnmpConfig(final int configId, final long zoneUIN)
 	{
 	   new ConsoleJob(Messages.get().NetworkCredentials_LoadingConfig, this, Activator.PLUGIN_ID, null) {
          @Override
          protected void runInternal(IProgressMonitor monitor) throws Exception
          {
-            final NetworkConfig loadedConfig = NetworkConfig.load(session);
+            config.load(configId, zoneUIN);
             runInUIThread(new Runnable() {
                @Override
                public void run()
                {
-                  setConfig(loadedConfig);
+                  setConfig(config);
                }
             });
          }
@@ -191,6 +252,21 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 				save();
 			}
 		};
+		
+
+      actionRefresh = new RefreshAction() {
+         @Override
+         public void run()
+         {       
+            if (modified)
+            {
+               if (!MessageDialogHelper.openQuestion(getSite().getShell(), "Refresh network configuration",
+                     "This will discard all unsaved changes. Do you really want to continue?"))
+                  return;          
+            }
+            loadSnmpConfig(NetworkConfig.ALL_CONFIGS, NetworkConfig.NETWORK_CONFIG_ALL);  
+         }
+      };
 	}
 	
 	/**
@@ -212,6 +288,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 	private void fillLocalPullDown(IMenuManager manager)
 	{
 		manager.add(actionSave);
+      manager.add(actionRefresh);
 	}
 
 	/**
@@ -223,6 +300,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 	private void fillLocalToolBar(IToolBarManager manager)
 	{
 		manager.add(actionSave);
+      manager.add(actionRefresh);
 	}
 	
 	/**
@@ -618,20 +696,30 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 	private void setConfig(NetworkConfig config)
 	{
 		this.config = config;
-		snmpCommunityList.setInput(config.getCommunities(zoneUIN));
-		snmpUsmCredList.setInput(config.getUsmCredentials(zoneUIN));
-		snmpPortList.setInput(config.getPorts(zoneUIN));
-		sharedSecretList.setInput(config.getSharedSecrets(zoneUIN));
+		updateFiledContant();
 		
 		modified = false;
+		bothModified = false;
 		firePropertyChange(PROP_DIRTY);
+	}
+	
+	/**
+	 * Update filed content
+	 */
+	private void updateFiledContant()
+	{
+      snmpCommunityList.setInput(config.getCommunities(zoneUIN));
+      snmpUsmCredList.setInput(config.getUsmCredentials(zoneUIN));
+      snmpPortList.setInput(config.getPorts(zoneUIN));
+      sharedSecretList.setInput(config.getSharedSecrets(zoneUIN));	   
 	}
 	
 	/**
 	 * Mark view as modified
 	 */
-	private void setModified()
+	private void setModified(int id)
 	{
+	   config.setConfigUpdate(zoneUIN, id);
 		if (!modified)
 		{
 			modified = true;
@@ -696,6 +784,15 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 	 */
 	private void save()
 	{
+	   if (bothModified && modified)
+      {
+         if (!MessageDialogHelper.openQuestion(getSite().getShell(), "Save network credential",
+               "Notwerk credentials already are modified by other users. Do you really want to continue and overwrite other users changes?\n"))
+            return;
+         content.hideMessage();   
+      }	  
+
+      saveInProgress = true;
 		new ConsoleJob(Messages.get().NetworkCredentials_SaveConfig, this, Activator.PLUGIN_ID, null) {
 			@Override
 			protected void runInternal(IProgressMonitor monitor) throws Exception
@@ -706,7 +803,9 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 					public void run()
 					{
 						modified = false;
+			         bothModified = false;
 						firePropertyChange(PROP_DIRTY);
+                  saveInProgress = false;
 					}
 				});
 			}
@@ -716,6 +815,12 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 			{
 				return Messages.get().NetworkCredentials_ErrorSavingConfig;
 			}
+
+         @Override
+         protected void jobFinalize()
+         {
+            saveInProgress = false;
+         }
 		}.start();
 	}
 	
@@ -731,7 +836,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 			String s = dlg.getValue();
 			config.addCommunityString(s, zoneUIN);
          snmpCommunityList.setInput(config.getCommunities(zoneUIN));
-         setModified();
+         setModified(NetworkConfig.COMUNITIES);
 		}
 	}
 	
@@ -749,7 +854,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 				list.remove(o);
 			}
 			snmpCommunityList.setInput(list);
-			setModified();
+			setModified(NetworkConfig.COMUNITIES);
 		}
 	}
    
@@ -783,7 +888,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
             }
          }
          snmpCommunityList.setInput(list);
-         setModified();
+         setModified(NetworkConfig.COMUNITIES);
       }
    }
 
@@ -799,7 +904,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 			cred.setZoneId((int)zoneUIN);
          config.addUsmCredentials(cred, zoneUIN);
          snmpUsmCredList.setInput(config.getUsmCredentials(zoneUIN));
-         setModified();
+         setModified(NetworkConfig.USM);
 		}
 	}
    
@@ -817,7 +922,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
       {
          final List<SnmpUsmCredential> list = config.getUsmCredentials(zoneUIN);
          snmpUsmCredList.setInput(list.toArray());
-         setModified();
+         setModified(NetworkConfig.USM);
       }
    }
 	
@@ -835,7 +940,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
 				list.remove(o);
 			}
 			snmpUsmCredList.setInput(list.toArray());
-			setModified();
+			setModified(NetworkConfig.USM);
 		}
 	}
 
@@ -869,7 +974,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
             }
          }
          snmpUsmCredList.setInput(list);
-         setModified();
+         setModified(NetworkConfig.USM);
       }
    }
 	
@@ -883,9 +988,9 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
       if (dlg.open() == Window.OK)
       {
          String value = dlg.getValue();
-         config.addPort(value, zoneUIN);
+         config.addPort(Short.parseShort(value), zoneUIN);
          snmpPortList.setInput(config.getPorts(zoneUIN));
-         setModified();
+         setModified(NetworkConfig.PORTS);
       }
    }
    
@@ -894,16 +999,16 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
     */
    private void removeSnmpPort()
    {
-      final List<String> list = config.getPorts(zoneUIN);
+      final List<Short> list = config.getPorts(zoneUIN);
       IStructuredSelection selection = (IStructuredSelection)snmpPortList.getSelection();
       if (selection.size() > 0)
       {
          for(Object o : selection.toList())
          {
-            list.remove(o);
+            list.remove((Short)o);
          }
          snmpPortList.setInput(list.toArray());
-         setModified();
+         setModified(NetworkConfig.PORTS);
       }
    }
 
@@ -914,13 +1019,13 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
     */
    protected void moveSnmpPort(boolean up)
    {
-      final List<String> list = config.getPorts(zoneUIN);
+      final List<Short> list = config.getPorts(zoneUIN);
       IStructuredSelection selection = (IStructuredSelection)snmpPortList.getSelection();
       if (selection.size() > 0)
       {
          for(Object o : selection.toList())
          {
-            int index = list.indexOf(o);
+            int index = list.indexOf((Short)o);
             if (up)
             {
                if (index < 1)
@@ -937,7 +1042,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
             }
          }
          snmpPortList.setInput(list);
-         setModified();
+         setModified(NetworkConfig.PORTS);
       }
    }
 
@@ -950,7 +1055,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
          String value = dlg.getValue();
          config.addSharedSecret(value, zoneUIN);
          sharedSecretList.setInput(config.getSharedSecrets(zoneUIN));
-         setModified();
+         setModified(NetworkConfig.SECRET);
       }
    }
 
@@ -965,7 +1070,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
             list.remove(o);
          }
          sharedSecretList.setInput(list.toArray());
-         setModified();
+         setModified(NetworkConfig.SECRET);
       }
    }
 
@@ -994,7 +1099,7 @@ public class NetworkCredentials extends ViewPart implements ISaveablePart
             }
          }
          sharedSecretList.setInput(list);
-         setModified();
+         setModified(NetworkConfig.SECRET);
       }
    }
 }

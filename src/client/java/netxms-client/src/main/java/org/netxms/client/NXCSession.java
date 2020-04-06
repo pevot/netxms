@@ -7541,14 +7541,16 @@ public class NXCSession
 
    /**
     * Get list of well-known SNMP communities configured on server.
+    * @param zoneUIN 
     *
     * @return map of SNMP community strings
     * @throws IOException  if socket I/O error occurs
     * @throws NXCException if NetXMS server returns an error or operation was timed out
     */
-   public Map<Integer, List<String>> getSnmpCommunities() throws IOException, NXCException
+   public Map<Integer, List<String>> getSnmpCommunities(long zoneUIN) throws IOException, NXCException
    {
       final NXCPMessage msg = newMessage(NXCPCodes.CMD_GET_COMMUNITY_LIST);
+      msg.setFieldInt32(NXCPCodes.VID_ZONE_UIN, (int)zoneUIN);
       sendMessage(msg);
       final NXCPMessage response = waitForRCC(msg.getMessageId());
 
@@ -7576,23 +7578,21 @@ public class NXCSession
     * Update list of well-known SNMP community strings on server. Existing list
     * will be replaced by given one.
     *
-    * @param map New map of SNMP community strings
+    * @param list New list of SNMP community strings
+    * @param zoneUIN zone
     * @throws IOException  if socket I/O error occurs
     * @throws NXCException if NetXMS server returns an error or operation was timed out
     */
-   public void updateSnmpCommunities(final Map<Integer, List<String>> map) throws IOException, NXCException
+   public void updateSnmpCommunities(List<String> list, int zoneUIN) throws IOException, NXCException
    {
       final NXCPMessage msg = newMessage(NXCPCodes.CMD_UPDATE_COMMUNITY_LIST);
-      long stringBase = NXCPCodes.VID_COMMUNITY_STRING_LIST_BASE, zoneBase = NXCPCodes.VID_COMMUNITY_STRING_ZONE_LIST_BASE;
-      for(Integer i : map.keySet())
+      msg.setFieldInt32(NXCPCodes.VID_ZONE_UIN, zoneUIN);
+      long stringBase = NXCPCodes.VID_COMMUNITY_STRING_LIST_BASE;
+      for(String s : list)
       {
-         for(String s : map.get(i))
-         {
-            msg.setField(stringBase++, s);
-            msg.setFieldInt32(zoneBase++, i);
-         }
+         msg.setField(stringBase++, s);
       }
-      msg.setFieldInt32(NXCPCodes.VID_NUM_STRINGS, (int)(stringBase - NXCPCodes.VID_COMMUNITY_STRING_LIST_BASE));
+      msg.setFieldInt32(NXCPCodes.VID_NUM_STRINGS, list.size());
       sendMessage(msg);
       waitForRCC(msg.getMessageId());
    }
@@ -7600,14 +7600,16 @@ public class NXCSession
    /**
     * Get list of well-known SNMP USM (user security model) credentials
     * configured on server.
+    * @param zoneUIN 
     *
     * @return Map of SNMP USM credentials
     * @throws IOException  if socket I/O error occurs
     * @throws NXCException if NetXMS server returns an error or operation was timed out
     */
-   public Map<Integer, List<SnmpUsmCredential>> getSnmpUsmCredentials() throws IOException, NXCException
+   public Map<Integer, List<SnmpUsmCredential>> getSnmpUsmCredentials(long zoneUIN) throws IOException, NXCException
    {
       final NXCPMessage msg = newMessage(NXCPCodes.CMD_GET_USM_CREDENTIALS);
+      msg.setFieldInt32(NXCPCodes.VID_ZONE_UIN, (int)zoneUIN);
       sendMessage(msg);
       final NXCPMessage response = waitForRCC(msg.getMessageId());
 
@@ -7642,24 +7644,17 @@ public class NXCSession
     * @throws IOException  if socket I/O error occurs
     * @throws NXCException if NetXMS server returns an error or operation was timed out
     */
-   public void updateSnmpUsmCredentials(final Map<Integer, List<SnmpUsmCredential>> map) throws IOException, NXCException
+   public void updateSnmpUsmCredentials(List<SnmpUsmCredential> list, int zoneUIN) throws IOException, NXCException
    {
       final NXCPMessage msg = newMessage(NXCPCodes.CMD_UPDATE_USM_CREDENTIALS);
+      msg.setFieldInt32(NXCPCodes.VID_ZONE_UIN, zoneUIN);
       long varId = NXCPCodes.VID_USM_CRED_LIST_BASE;
-      int count = 0, i;
-      for(List<SnmpUsmCredential> l : map.values())
+      for(SnmpUsmCredential element : list)
       {
-         if (l.isEmpty())
-            continue;
-
-         for(i = 0; i < l.size(); i++, varId += 10)
-         {
-            l.get(i).fillMessage(msg, varId);
-         }
-         count += i;
+         element.fillMessage(msg, varId);
       }
 
-      msg.setFieldInt32(NXCPCodes.VID_NUM_RECORDS, count);
+      msg.setFieldInt32(NXCPCodes.VID_NUM_RECORDS, list.size());
       sendMessage(msg);
       waitForRCC(msg.getMessageId());
    }
@@ -11789,14 +11784,16 @@ public class NXCSession
 
    /**
     * Get shared secret list form server
+    * @param zoneUIN 
     * 
     * @return map with zone id and shared secret list
     * @throws IOException if socket I/O error occurs
     * @throws NXCException if NetXMS server returns an error or operation was timed out
     */
-   public Map<Integer, List<String>> getShredSecrets() throws IOException, NXCException
+   public Map<Integer, List<String>> getShredSecrets(long zoneUIN) throws IOException, NXCException
    {
       final NXCPMessage msg = newMessage(NXCPCodes.CMD_GET_SHARED_SECRET_LIST);
+      msg.setFieldInt32(NXCPCodes.VID_ZONE_UIN, (int)zoneUIN);
       sendMessage(msg);
       final NXCPMessage response = waitForRCC(msg.getMessageId());
 
@@ -11828,22 +11825,72 @@ public class NXCSession
     * @throws IOException if socket I/O error occurs
     * @throws NXCException if NetXMS server returns an error or operation was timed out
     */
-   public void updateSharedSecrets(Map<Integer, List<String>> sharedSecrets) throws IOException, NXCException
+   public void updateSharedSecrets(List<String> sharedSecrets, int zoneUIN) throws IOException, NXCException
    {
       final NXCPMessage msg = newMessage(NXCPCodes.CMD_UPDATE_SHARED_SECRET_LIST);
       long baseId = NXCPCodes.VID_SHARED_SECRET_LIST_BASE;
-      int count = 0;
-      for(Integer i : sharedSecrets.keySet())
+      for(String s : sharedSecrets)
       {
-         for(String s : sharedSecrets.get(i))
-         {
-            msg.setField(baseId++, s);
-            msg.setFieldInt32(baseId++, i);
-            baseId += 8;
-            count++;
-         }
+         msg.setField(baseId++, s);
       }
-      msg.setFieldInt32(NXCPCodes.VID_NUM_ELEMENTS, count);
+      msg.setFieldInt32(NXCPCodes.VID_NUM_ELEMENTS, sharedSecrets.size());
+      sendMessage(msg);
+      waitForRCC(msg.getMessageId());
+   }
+
+   /**
+    * Get SNMP port list
+    * @param zoneUIN 
+    * 
+    * @return
+    * @throws IOException if socket I/O error occurs
+    * @throws NXCException if NetXMS server returns an error or operation was timed out
+    */
+   public Map<Integer, List<Short>> getSNMPPors(long zoneUIN) throws IOException, NXCException
+   {
+      final NXCPMessage msg = newMessage(NXCPCodes.CMD_GET_SNMP_PORT_LIST);
+      msg.setFieldInt32(NXCPCodes.VID_ZONE_UIN, (int)zoneUIN);
+      sendMessage(msg);
+      final NXCPMessage response = waitForRCC(msg.getMessageId());
+
+      int count = response.getFieldAsInt32(NXCPCodes.VID_ZONE_SNMP_PORT_COUNT);
+      long baseId = NXCPCodes.VID_ZONE_SNMP_PORT_LIST_BASE;
+      Map<Integer, List<Short>> map = new HashMap<Integer, List<Short>>(count);
+      List<Short> stringList = new ArrayList<Short>();
+      int zoneId = 0;
+      for(int i = 0; i < count; i++)
+      {
+         if (i != 0 && zoneId != response.getFieldAsInt32(baseId+1))
+         {
+            map.put(zoneId, stringList);
+            stringList = new ArrayList<Short>();
+         }
+         stringList.add(response.getFieldAsInt16(baseId++));
+         zoneId = response.getFieldAsInt32(baseId++);
+         baseId += 8;
+      }
+      if (count > 0)
+         map.put(zoneId, stringList);
+      return map;
+   }
+   
+   /**
+    * Update SNMP port list
+    * 
+    * @param ports
+    * @throws IOException if socket I/O error occurs
+    * @throws NXCException if NetXMS server returns an error or operation was timed out
+    */
+   public void updateSNMPPorts(List<Short> ports, int zoneUINT) throws IOException, NXCException
+   {
+      final NXCPMessage msg = newMessage(NXCPCodes.CMD_UPDATE_SNMP_PORT_LIST);
+      msg.setFieldInt32(NXCPCodes.VID_ZONE_UIN, zoneUINT);
+      long baseId = NXCPCodes.VID_ZONE_SNMP_PORT_LIST_BASE;
+      for(Short s : ports)
+      {
+         msg.setFieldInt16(baseId++, s);
+      }
+      msg.setFieldInt32(NXCPCodes.VID_ZONE_SNMP_PORT_COUNT, ports.size());
       sendMessage(msg);
       waitForRCC(msg.getMessageId());
    }

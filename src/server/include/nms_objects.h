@@ -3524,7 +3524,6 @@ protected:
 	InetAddressIndex *m_idxNodeByAddr;
 	InetAddressIndex *m_idxInterfaceByAddr;
 	InetAddressIndex *m_idxSubnetByAddr;
-	StringList m_snmpPorts;
 	time_t m_lastHealthCheck;
 	bool m_lockedForHealthCheck;
 
@@ -3554,7 +3553,6 @@ public:
    virtual json_t *toJson() override;
 
    UINT32 getUIN() const { return m_uin; }
-   const StringList *getSnmpPortList() const { return &m_snmpPorts; }
 
    UINT32 getProxyNodeId(NetObj *object, bool backup = false);
 	bool isProxyNode(UINT32 nodeId) const;

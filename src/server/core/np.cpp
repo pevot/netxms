@@ -353,11 +353,10 @@ static bool HostIsReachable(const InetAddress& ipAddr, UINT32 zoneUIN, bool full
       {
          StringList secrets;
          DB_HANDLE hdb = DBConnectionPoolAcquireConnection();
-         DB_STATEMENT hStmt = DBPrepare(hdb, _T("SELECT secret FROM shared_secrets WHERE zone=? OR zone=? ORDER BY zone DESC, id ASC"));
+         DB_STATEMENT hStmt = DBPrepare(hdb, _T("SELECT secret FROM shared_secrets WHERE zone=? OR zone=-1 ORDER BY zone DESC, id ASC"));
          if (hStmt != NULL)
          {
            DBBind(hStmt, 1, DB_SQLTYPE_INTEGER, (proxyNode != nullptr) ? proxyNode->getZoneUIN() : 0);
-           DBBind(hStmt, 2, DB_SQLTYPE_INTEGER, SNMP_CONFIG_GLOBAL);
 
            DB_RESULT hResult = DBSelectPrepared(hStmt);
            if (hResult != NULL)
